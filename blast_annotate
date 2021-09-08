@@ -1,0 +1,56 @@
+#!/bin/bash
+
+USAGE="Usage: blast_annotate <query.fa> <genome.fa> <evalue_threshold>\\n 
+annotation use blastn - default parameters: evalue=1E-99"
+
+# --- Options processing -------------------------------------------
+if [ $# == 0 ]
+then
+    echo -e $USAGE
+    exit 1;
+fi
+
+QUERY=$1
+GENOME=$2
+
+x=$1
+y=${x%.*}
+QUERY_NAME=${y##*/}
+
+x=$2
+y=${x%.*}
+GENOME_NAME=${y##*/}
+
+OUTNAME=${GENOME_NAME}_${QUERY_NAME}
+
+#if [[ $3 == 0 ]]
+#then
+#    IDENTITY=0.95
+#else
+#	IDENTITY=$3
+#fi
+
+#if [[ $4 == 0 ]]
+#then
+#    COVID=0.95
+#else
+#	COVID=$4
+#fi
+
+if [[ $3 == 0 ]]
+then
+    EVAL=1E-99
+else
+	EVAL=$3
+fi
+
+echo "Running BLAST"
+
+blastn -task blastn -subject $GENOME -query $QUERY -dust no \
+  -evalue $EVAL -culling_limit 1 -outfmt 6 \
+  -out $PWD/blastn.tab
+
+
+echo "Converting results to GFF3 format"
+
+blast2gff.py -b blastn.tab -p BLASTN -t RNA > $PWD/${OUTNAME}.gff3

@@ -1,0 +1,261 @@
+#!/bin/bash
+
+# email: guerillot.romain@hotmail.fr
+# Authors: Romain Guerillot, Torsten Seemann, Mark B. Schultz
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published
+# by the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+# functions
+function usage()
+{
+	echo "NAME:"
+	echo    "rmseq2 0.1 by R. Guerillot and T. Seemann <guerillot.romain@gmail.com>"
+	echo ""
+	echo "SYNOPSIS:"
+	echo "  This pipeline is designed to accurately identify and quantify rare "
+	echo "  genetic variants (SNP or INDEL) from barcoded amplicon sequencing  "
+	echo "  libraries. It has bees specifically designed for the analysis of   "
+	echo "  Resistance Mutation sequencing experiments (RM-seq) but it can be  " 
+	echo "  used with any other barcoded libraries"
+	echo ""
+	echo "USAGE:"
+	echo "  rmseq2 -1=<READ1> -2=<READ2> -r=<REFERENCE.FASTA> -g=<REFERENCE.GFF3> -o=<OUTPUT_DIR> [options]"
+	echo ""
+	echo "OPTIONS:"
+	echo "  -o     Output directory (default = ./RMSEQ2-date-time)"
+	echo "  -b     barcode motif at 5' of read1 (default = NNNNNNNNNNNNNNNN)"
+	echo "  -d     minimum sequencing depth per barcode for demultiplexing and calling variants (default = 10)"
+	echo "  -f     minimum allele frequency for variant calling (default = 0.6)"
+	echo "  -s     start coordinate for variant calling (default = 1)"
+	echo "  -e     end coordinate for variant calling (default = 100000000)"
+	echo "  -t     number of threads to use (default = 4)"
+	echo "  -c     set to true to skip all read processing steps and only perform variants call (default = false)"
+	echo ""
+}
+
+function parsed_args()
+{
+	echo ""
+	echo "SET VARIABLES:"
+	echo "  Read1 path = ${R1}"
+	echo "  Read2 path = ${R2}"
+	echo "  Reference fasta path = ${REF}"
+	echo "  Reference gff3 path = ${GFF}"
+	echo "  Output directory = ${OUTDIR}"
+	echo "  Barcode motif = ${BCM} of length = ${BCL}"
+	echo "  Minimum depth = ${DEPTH}"
+	echo "  Minimum frequency  = ${FREQ}"
+	echo "  Start of sequencing = ${START}"
+	echo "  End of sequencing = ${END}"
+	echo "  Number of threads = ${THREADS}"
+	echo "  Reference sequence name = ${NAME}"
+	echo "  Variants call only mode = ${CALL_ONLY}"
+	echo ""
+}
+
+# Set default argument values
+OUTDIR=RMSEQ2-`date +%Y%m%d-%H%M%S`
+BCM=NNNNNNNNNNNNNNNN
+BCL=${#BCM}
+DEPTH=10
+FREQ=0.6
+START=1
+END=100000000
+THREADS=4
+CALL_ONLY=false
+
+# Parse arguments
+for i in "$@"
+do
+case $i in
+    -1=*|--read1=*)
+    pattern="${i#*=}"
+    R1=( $pattern )
+    shift
+    ;;
+
+    -2=*|--read2=*)
+    pattern="${i#*=}"
+    R2=( $pattern )
+    shift
+    ;;
+
+    -r=*|--ref_fasta=*)
+    pattern="${i#*=}"
+    REF=( $pattern )
+    NAME=$(grep "^>" $REF | cut -d" " -f1) # Parse the sequence name for samtools view read extraction 
+    NAME="${NAME:1}"
+    shift
+    ;;
+
+    -g=*|--gff3=*)
+    pattern="${i#*=}"
+    GFF=( $pattern )
+    shift
+    ;;
+
+    -o=*|--outdir=*)
+    pattern="${i#*=}"
+    OUTDIR=( $pattern )
+    shift
+    ;;
+
+    -b=*|--barcode_motif=*)
+    BCM="${i#*=}"
+    BCL=${#BCM}
+    shift
+    ;;
+
+    -d=*|--min_depth=*)
+    DEPTH="${i#*=}"
+    shift
+    ;;
+
+    -f=*|--min_freq=*)
+    FREQ="${i#*=}"
+    shift
+    ;;
+
+    -s=*|--start=*)
+    START="${i#*=}"
+    shift
+    ;;
+
+    -e=*|--end=*)
+    END="${i#*=}"
+    shift
+    ;;
+
+    -t=*|--threads=*)
+    THREADS="${i#*=}"
+    shift
+    ;;
+
+    -c=*|--call=*)
+    CALL_ONLY="${i#*=}"
+    shift
+    ;;
+
+   *)
+    ;;
+esac
+done
+
+# Check mandatory argments:
+if [ -z "$R1" ] && [ "$CALL_ONLY" = false ]
+  then
+    echo "ERROR: No path to read 1 supplied"
+	parsed_args
+	usage
+	exit 1
+fi
+if [ -z "$R2" ] && [ "$CALL_ONLY" = false ]
+  then
+    echo "ERROR: No path to read 2 supplied"
+	parsed_args
+	usage
+	exit 1
+fi
+if [ -z "$REF" ]
+  then
+    echo "ERROR: No path to fasta reference supplied"
+	parsed_args
+	usage
+	exit 1
+fi
+if [ -z "$GFF" ]
+  then
+    echo "ERROR: No path to gff3 reference supplied"
+	parsed_args
+	usage
+	exit 1
+fi
+
+# Check if output directory exist and stop execution if already exist
+
+if [[ -d "$OUTDIR" ]]
+then
+	echo "ERROR: The output directory ${OUTDIR} already exist"
+	exit 1
+fi
+
+# RUN PIPELINE
+parsed_args
+
+# Create output directory
+echo ""
+echo "oooooooooo Creating output directory  oooooooooo"
+mkdir -p $OUTDIR
+
+# Call variants only mode
+if [ "$CALL_ONLY" = true ]
+  then
+    echo ""
+    echo "oooooooooo Skipping read processing and call variants oooooooooo"
+fi
+
+# Cut barcodes from read and add to header using umi_tools
+if [ "$CALL_ONLY" = false ]
+  then
+    echo ""
+    echo "oooooooooo Cutting and adding barcodes to fastq sequence headers with umi_tools oooooooooo"
+    umi_tools extract -p $BCM -I "$R1" -S ${OUTDIR}/barcoded_R1.fq --read2-in="$R2" --read2-out=${OUTDIR}/barcoded_R2.fq
+fi
+
+# Keep only the reads that align to the reference (samtools fastq -F 12 => extract reads when both reads pair map to the reference)
+if [ "$CALL_ONLY" = false ]
+  then
+    echo ""
+    echo "oooooooooo Keeping only read pairs aligning to the reference with minimap2 | samtools oooooooooo"
+    minimap2 -x sr -t $THREADS -d ${OUTDIR}/ref.mmi $REF # indexing ref to avoid reindexing later
+    minimap2 -a -x sr -t $THREADS ${OUTDIR}/ref.mmi ${OUTDIR}/barcoded_R1.fq ${OUTDIR}/barcoded_R2.fq | samtools sort -l 0 --threads $THREADS | samtools view -@ $((THREADS - 1)) -S -b - > ${OUTDIR}/mapped.bam
+    samtools index ${OUTDIR}/mapped.bam
+    samtools view -h ${OUTDIR}/mapped.bam ${NAME}:${START}-${END} | samtools fastq -n - > ${OUTDIR}/mapped_barcoded.fq
+fi
+
+# BBTOOLS to demultiplex
+if [ "$CALL_ONLY" = false ]
+  then
+    echo ""
+    echo "oooooooooo Demultiplexing reads according to barcode with BBTools demuxbyname oooooooooo"
+    mkdir -p ${OUTDIR}/demux_fastq
+    demuxbyname.sh in=${OUTDIR}/mapped_barcoded.fq out=${OUTDIR}/demux_fastq/%.fq delimiter=_ column=2 minreads=$DEPTH length=$BCL stats=${OUTDIR}/demux.stats
+fi
+
+# Call variant in parallel using minimap2 | freebayes | bcftools
+echo ""
+echo "oooooooooo Aligning reads and calling variants in parallel with minimap2 | freebayes | bcftools oooooooooo"
+echo -e "SAMPLE\tBARCODE\tDP\tRO\tAO\tSRF\tSRR\tSAF\tSAR\tMQMR\tMQM\tTYPE\tPOS\tREF\tALT\tBCSQ" > ${OUTDIR}/variants_raw.tab
+find ${OUTDIR}/demux_fastq/ -name *.fq | nice parallel --bar -j${THREADS} "minimap2 -a -x sr -t 1 ${OUTDIR}/ref.mmi {} | freebayes -f $REF -p 1 -c --min-alternate-count 1 --min-alternate-fraction $FREQ --pooled-continuous --report-monomorphic | bcftools filter -Ou -i 'POS >= $START & POS <= $END & INFO/DP >= $DEPTH & (((INFO/RO)/(INFO/DP)) >= $FREQ | ((INFO/AO)/(INFO/DP)) >= $FREQ)' | vt normalize -q -r $REF - | bcftools csq -f $REF -g $GFF -s - | bcftools query -f '"$OUTDIR"\t{/.}\t%DP\t%RO\t%AO\t%SRF\t%SRR\t%SAF\t%SAR\t%MQMR\t%MQM\t%TYPE\t%POS\t%REF\t%ALT\t%BCSQ\n' -H --allow-undef-tags - | grep -v '^#'" >> ${OUTDIR}/variants_raw.tab
+
+# Calculate allele frequencies and write result tables
+echo ""
+echo "oooooooooo Calculating allele frequencies and writing results oooooooooo"
+echo -e "SAMPLE\tBARCODE\tDP\tAC\tAF\tCF\tCR\tMQ\tTYPE\tPOS\tREF\tALT\tBCSQ" > ${OUTDIR}/variants.tab 
+tail -n +2 ${OUTDIR}/variants_raw.tab | awk -F"\t" '{if ($4>$5) {printf "%s\t%s\t%s\t%s\t%f\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",$1,$2,$3,$4,$4/$3,$6,$7,$10,$12,$13,$14,$15,$16} else {printf "%s\t%s\t%s\t%s\t%f\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",$1,$2,$3,$5,$5/$3,$8,$9,$11,$12,$13,$14,$15,$16}}' >> ${OUTDIR}/variants.tab
+echo -e "SAMPLE\tTYPE\tPOS\tREF\tALT\tBCSQ\tCOUNT" > ${OUTDIR}/variants_count.tab
+tail -n +2 ${OUTDIR}/variants.tab | datamash -s -g 1,9,10,11,12,13 count 12 | sort -n -k3 >> ${OUTDIR}/variants_count.tab
+echo -e "POS\tREFS\tALTS\tCOUNTS\tBCSQS" > ${OUTDIR}/variants_count_pos.tab
+tail -n +2 ${OUTDIR}/variants_count.tab | datamash -s -g 3 collapse 4,5,7,6 | sort -n -k1 >> ${OUTDIR}/variants_count_pos.tab
+
+# Counting variants
+echo ""
+echo "oooooooooo Counting variants found oooooooooo"
+NB_VAR=$(grep -v REF ${OUTDIR}/variants_count.tab | cut -f3 | wc -l)
+NB_VAR_POS=$(grep -v REF ${OUTDIR}/variants_count.tab | cut -f3 | uniq -c | wc -l)
+NB_BC=$(find ${OUTDIR}/demux_fastq/ -name *.fq | wc -l)
+
+echo ""
+echo "Done!"
+echo "${NB_VAR} variant(s) affecting ${NB_VAR_POS} different position(s) have been found among ${NB_BC} barcoded DNA templates" 
+echo "Thanks for using rmseq2"
+
+exit 0

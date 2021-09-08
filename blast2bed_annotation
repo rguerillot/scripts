@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+
+# Author: Romain Guerillot
+# Date: August 2020
+
+USAGE="Usage: blast2bed <genome.fa> <sequence.fa> <out.bed> <min_identity> <annot_prefix> \\n
+annotation use blastn and output zero-based coordinates \\n \\n
+default parameters:\\n
+\\t min_identity=0.98 \\n
+\\t annot_preffix=\"\""
+
+# --- Options processing -------------------------------------------
+if [ $# == 0 ]
+then
+    echo -e $USAGE
+    exit 1;
+fi
+
+#Set variables
+GENOME=$1 # "FPR3757.fasta"
+SEQ=$2 # "Sa_TSS-EMOTE_promoteur_cd_hit_c0.9.fa"
+OUT=$3 # "test.bed"
+ID=${4-0.98} # % identity threshold
+NAME=${5-""}
+
+
+blastn -task blastn -query $GENOME -subject $SEQ -dust no -max_target_seqs 99999999 -outfmt '6 sseqid qstart qend nident slen sstart send' | 
+awk '{ print $1, $2, $3, $4, $5, $4/$5, $6, $7}' | 
+awk '{ if ($6 >= '$ID') {print $1"\t"$2-1"\t"$3-1"\t"$6"\t"$7"\t"$8}}' | 
+awk -v my_var=$NAME '{ 
+if ($5 > $6) 
+    print "chrom1\t"$2"\t"$3"\t"my_var$1"\t"$4*100"\t""-"
+else 
+    print "chrom1\t"$2"\t"$3"\t"my_var$1"\t"$4*100"\t""+"
+}' | sort -n -k2 > $OUT
+
+
